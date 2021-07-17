@@ -1,0 +1,258 @@
+---
+title: "MMR Data Viz!"
+author: "Fabio Votta"
+output: html_document
+---
+
+
+## Packages and Folders
+
+```{r}
+# Install these packages if you don't have them yet
+# if (!require("pacman")) install.packages("pacman")
+# devtools::install_github("favstats/tidytemplate")
+
+pacman::p_load(tidyverse, marinemammalrescue)
+
+```
+
+
+## Load Data
+
+```{r, data}
+
+marine_mammals
+
+```
+## How many doctors are there in the data?
+
+```{r}
+
+marine_mammals %>% 
+    filter(str_starts(name, "Dr\\."))
+```
+```{r}
+marine_mammals %>% 
+    count(collection_site, sort = T)
+```
+
+
+
+```{r}
+mmr <- marine_mammals %>% 
+    mutate(days_in_care = as.numeric(release_date - admit_date)) #%>% 
+    # select(days_in_care)
+```
+
+
+
+
+## Analysis / Dataviz
+
+```{r, analysis}
+
+mmr %>% 
+    ggplot(aes(days_in_care)) +
+    geom_density()
+
+
+```
+
+```{r}
+mmr %>% 
+    arrange(desc(admit_weight)) %>% 
+    drop_na(release_date) %>% 
+    filter(name != "Berni") %>% 
+    ggplot(aes(admit_weight, days_in_care, color = sex)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = F) +
+    scale_color_manual(values = c("orange", "darkblue")) +
+    theme_minimal()
+
+```
+
+
+```{r}
+mmr %>% 
+    arrange(desc(admit_weight)) %>% 
+    drop_na(release_date) 
+```
+
+
+
+## Fancy Maps
+
+```{r}
+library(tidygeocoder)
+
+coord_mmr <- mmr %>% 
+    mutate(collection_site = paste0(collection_site, ", British Columbia, Canada")) %>% 
+    geocode(collection_site, 
+            method = "cascade",
+            cascade_order  = c("arcgis", "osm"))
+
+coord_mmr 
+```
+
+
+```{r}
+coord_mmr %>% 
+    ggplot(aes(lat, long)) +
+    geom_point()
+```
+
+
+```{r}
+library("rnaturalearth")
+library("rnaturalearthdata")
+library("ggspatial")
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+```
+
+
+
+
+
+```{r}
+library(showtext)
+library(cowplot)
+library(magick)
+
+showtext_auto()
+
+font_add_google("Roboto Condensed", "roboto")
+```
+
+
+```{r}
+map_plot <- ggplot(data = world) +
+    geom_sf() +
+    geom_point(data = coord_mmr, 
+               aes(long, lat), 
+               size = 0.9, color = "darkblue") +
+    coord_sf(xlim = c(-122.5, -128.5), 
+             ylim = c(48, 51), 
+             expand = FALSE) +
+    theme_void()  + 
+    theme(
+        panel.grid.major = element_line(color = gray(.5), 
+                                          linetype = "dashed",  
+                                          size = 0.5), 
+        panel.background = element_rect(fill = "aliceblue"),
+        plot.title = element_text(family = "roboto", size = 75),
+        plot.subtitle = element_text(family = "roboto", size = 50),
+        plot.caption = element_text(family = "roboto", size = 30)
+        )  +
+    annotation_scale(location = "bl", width_hint = 0.5, text_cex = 3) +
+    annotation_north_arrow(location = "bl", 
+                           text_cex = 20,
+                           which_north = "true", 
+                           pad_x = unit(0.75, "in"), 
+                           pad_y = unit(0.5, "in"),
+        style = north_arrow_fancy_orienteering) +
+    labs(title = "Marine Mammal Rescue Collection Sites",
+         subtitle = "Approximate location of rescue site as determined by ArcGIS geocoding",
+         caption = "Data Source: Courtesy of Marine Mammal Rescue. Data Visualization by: @favstats and Twitch chat.")
+
+
+# ggdraw() +
+#   draw_image("https://dqgt5bdmzyj47.cloudfront.net/wp-content/uploads/fbrfg/mstile-144x144.png") +
+#   draw_plot(map_plot)
+
+ggsave(plot = map_plot, filename = "img/collection_site_map.png", width = 10, height = 6)
+
+```
+
+```{r}
+source("utils.R")
+
+
+
+plot_with_logo <- add_logo(
+  plot_path = "img/collection_site_map.png", # url or local file for the plot
+  logo_path = "https://dqgt5bdmzyj47.cloudfront.net/wp-content/uploads/fbrfg/mstile-144x144.png", # url or local file for the logo
+  logo_position = "top right", # choose a corner
+  # 'top left', 'top right', 'bottom left' or 'bottom right'
+  logo_scale = 15, #as default, but can change to manually make logo bigger
+  y_offset = 0.15,
+  x_offset = 0.2
+)
+
+# save the image and write to working directory
+magick::image_write(plot_with_logo, "img/plot_with_logo.png")
+
+
+```
+
+```{r}
+lab_mmr <- coord_mmr %>% 
+    mutate(collection_site = str_remove(collection_site, ", British Columbia, Canada")) %>% 
+  rowwise() %>% 
+  mutate(lab = paste(
+    sep = "<br>",
+    glue::glue("<b>Patient Name: <a href='{url}'>{name}</a></b>"),
+    glue::glue("<b>Patient ID:</b> {patient_id}"),
+    glue::glue("<b>Sex:</b> {sex}"),
+    glue::glue("<b>Collection Site:</b> {collection_site}"),
+    glue::glue("<b>Reason for Admittance:</b> {reason_for_admit}"),
+    glue::glue("<b>Admit Date:</b> {admit_date}")),
+    glue::glue("<b>Admit Weight:</b> {admit_weight}"),
+         lab = htmltools::HTML(lab)) %>% 
+  ungroup()
+```
+
+
+
+```{r}
+library(leaflet)
+library(htmltools)
+
+
+m <- leaflet(lab_mmr) %>% 
+    addTiles() %>% 
+    addCircleMarkers(
+      lng=~long, 
+               lat=~lat, 
+               fillOpacity = 1,
+               stroke = F,
+               fillColor = "#00bfff",
+               radius = 5,
+               label = ~lab) #%>% 
+    # addPopups(lng=coord_mmr$long, lat=coord_mmr$lat, )
+
+m 
+```
+
+```{r}
+content <- paste(sep = "<br/>",
+  "<b><a href='http://www.samurainoodle.com'>Samurai Noodle</a></b>",
+  "606 5th Ave. S",
+  "Seattle, WA 98138"
+)
+
+leaflet() %>% addTiles() %>%
+  addPopups(-122.327298, 47.597131, content,
+    options = popupOptions(closeButton = FALSE)
+  )
+
+df <- read.csv(textConnection(
+"Name,Lat,Long
+<b>Samurai Noodle</b>,47.597131,-122.327298
+Kukai Ramen,47.6154,-122.327157
+Tsukushinbo,47.59987,-122.326726"))
+
+leaflet(df) %>% addTiles() %>%
+  addMarkers(~Long, ~Lat, label = ~Name)
+```
+
+
+
+## Closing out
+
+```{r}
+saveRDS(lab_mmr, file = "data/lab_mmr.rds")
+```
+
+
